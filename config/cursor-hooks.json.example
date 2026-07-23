@@ -1,9 +1,9 @@
 {
   "version": 1,
   "hooks": {
-    "afterAgentResponse": [
+    "sessionStart": [
       {
-        "command": "REPLACE_WITH_REPO/scripts/cursor-inbox-hook.py",
+        "command": "/usr/bin/python3 'REPLACE_WITH_REPO/scripts/cursor_session_start.py'",
         "timeout": 10
       }
     ]

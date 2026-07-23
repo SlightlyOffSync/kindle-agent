@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from datetime import datetime, timezone
@@ -15,7 +16,7 @@ except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore
 
 ROOT = Path(__file__).resolve().parents[1]
-INBOX = ROOT / "inbox"
+INBOX = Path(os.environ.get("KINDLE_AGENT_INBOX", ROOT / "inbox")).expanduser()
 SESSIONS = INBOX / "sessions"
 INDEX = INBOX / "index.json"
 INGEST_LOCK = INBOX / ".ingest.lock"
@@ -247,4 +248,3 @@ def trigger_push(session_id: str | None = None) -> None:
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-

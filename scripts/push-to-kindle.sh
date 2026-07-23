@@ -94,7 +94,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from inbox_lib import rebuild_index, session_dir, update_session_meta, read_json
 
 only = sys.argv[1] if len(sys.argv) > 1 else ""
-sessions_root = ROOT / "inbox" / "sessions"
+sessions_root = Path(os.environ.get("KINDLE_AGENT_INBOX", ROOT / "inbox")) / "sessions"
 sessions_root.mkdir(parents=True, exist_ok=True)
 
 targets = []
