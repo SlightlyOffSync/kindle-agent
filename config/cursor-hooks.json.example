@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hooks": {
+    "afterAgentResponse": [
+      {
+        "command": "REPLACE_WITH_REPO/scripts/cursor-inbox-hook.py",
+        "timeout": 10
+      }
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<extension>
+	<information>
+		<name>Agent Feed</name>
+		<version>0.2</version>
+		<author>kindle-agent</author>
+		<id>agentfeed</id>
+	</information>
+	<menus>
+		<menu type="json" dynamic="true">menu.json</menu>
+	</menus>
+</extension>

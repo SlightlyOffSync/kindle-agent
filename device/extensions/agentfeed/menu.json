@@ -1,0 +1,19 @@
+{
+	"items": [
+	{
+		"name": "Agent Feed",
+		"priority": -100,
+		"items": [
+		{
+			"name": "Open",
+			"priority": 1,
+			"action": "/bin/sh",
+			"params": "/mnt/us/extensions/agentfeed/bin/pager.sh",
+			"exitmenu": true,
+			"status": false,
+			"internal": "status Agent Feed · idle sleep 5m · power quits"
+		}
+		]
+	}
+	]
+}
