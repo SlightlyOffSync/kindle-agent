@@ -16,7 +16,7 @@ from pathlib import Path
 from inbox_lib import INBOX, ingest_agent_message, trigger_push
 
 STATE_DIR = INBOX / ".codex-tail"
-MIN_CHARS = 40
+MIN_CHARS = 1
 
 
 def _extract_text(content: object) -> str:

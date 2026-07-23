@@ -1,173 +1,190 @@
 # Kindle Agent Feed
 
-Push coding-agent replies to a jailbroken Kindle Oasis so you can read them on e-ink.
+> Read live coding-agent updates on a Kindle, without keeping a terminal in view.
 
-This is **not** a long-running daemon or system service. Mac-side work is **user-space hooks**: when Cursor or Codex finishes a turn, a small script writes the inbox, renders page PNGs, and SSH-pushes to the Kindle. Nothing needs to sit in Login Items for that path — hooks only run when an agent runs.
+Kindle Agent Feed turns short progress messages from tools such as Codex and Cursor into a continuously updated Kindle document. It is designed for the moments when an agent is working for a while and you want a calm, readable view of what it is doing.
 
-The Kindle app itself is also user-space: open it from **KUAL → Agent Feed** when you want to read. You can add a shortcut later if you like; it is not required.
+![Kindle Agent Feed preview](assets/kindle-agent-feed-preview.png)
 
-## Architecture
+## What it does
 
+- Streams completed assistant updates into a local inbox.
+- Renders the inbox as Kindle-friendly page images.
+- Pushes the refreshed session library to a jailbroken Kindle over SSH.
+- Uses one lightweight transcript watcher per active agent session, including parallel sessions.
+- Stops each watcher automatically when its parent Codex process exits.
+
+Tool-call details and file diffs are intentionally not included: the feed is for the agent's human-readable progress updates.
+
+## Quick start
+
+### 1. Install the local dependencies
+
+```bash
+cd kindle-agent
+python3 -m pip install -r requirements.txt
 ```
-Cursor / Codex turn ends
-        │
-        ▼
-   hook script (user process)
-        │
-        ▼
-  inbox/sessions/<agent>-<id>/
-    meta.json · feed.md · pages/*.png
-        │
-        ▼
-  scripts/push-to-kindle.sh  →  SSH → /mnt/us/agentfeed/
-        │
-        ▼
-  KUAL → Agent Feed (library + reader)
-```
 
-## Prerequisites (Mac)
+### 2. Configure Kindle access
 
-- Python 3 with deps in `requirements.txt` (mistune, PyMuPDF, Pillow; Pygments optional for code highlighting)
-- `sshpass` (Homebrew) for password SSH, or key-based SSH to the Kindle
-- Kindle on Wi‑Fi with SSH reachable (USBNetLite / Dropbear)
-
-Config lives in `config/kindle.env` (gitignored). Copy the example and fill in your Kindle SSH details:
+Copy the untracked local configuration template, then fill in your device-specific values:
 
 ```bash
 cp config/kindle.env.example config/kindle.env
 chmod 600 config/kindle.env
-./scripts/discover-kindle.sh   # optional: find/update host
 ```
 
-Cursor hook wiring example: `config/cursor-hooks.json.example` (point the command at this repo’s `scripts/cursor-inbox-hook.py`).
-## Prerequisites (Kindle)
+`config/kindle.env` and `config/known_hosts` are ignored by Git. Do not put a device address, password, or host key in tracked files.
 
-Jailbroken Oasis-class device with KUAL. Install once (USB mass storage or SSH):
+Optionally discover a Kindle on the local network:
 
-- `device/extensions/agentfeed/` → `/mnt/us/extensions/agentfeed/`
-- Feed data lands at `/mnt/us/agentfeed/`
+```bash
+./scripts/discover-kindle.sh
+```
 
-Use `/mnt/us/libkh/bin/fbink` for image blit (KOReader’s `fbink` often has no image support).
+Discovery is opt-in. It first tries the configured host, then the standard USB networking address, and finally probes the active local `/24` networks for an SSH-enabled Kindle. It prints a verified address; a successful push may save that address to your ignored `config/kindle.env`.
 
-## Hooks (user-space producers)
+This project expects a jailbroken Kindle with SSH access and KUAL installed. See [Kindle setup](#kindle-setup) for the device-side pieces.
 
-Hooks fire **at the end of each agent turn**, not when you open the Kindle. An agent can run many turns before you read — that is expected.
+### 3. Install the reader on the Kindle
 
-- Each turn **appends** to that session’s `feed.md` (file-locked).
-- Each turn **requests** a push; if a push is already running, later turns only mark the inbox dirty.
-- The pusher **drains**: after SSH it re-checks whether more turns arrived and re-pushes if needed.
+```bash
+scp -r device/extensions/agentfeed root@"$KINDLE_SSH_HOST":/mnt/us/extensions/
+ssh root@"$KINDLE_SSH_HOST" 'chmod +x /mnt/us/extensions/agentfeed/bin/pager.sh'
+```
 
-So the Kindle should end up with the full multi-turn transcript, not just the last message. Stress test: `scripts/test-multiturn-hooks.py`.
+Restart KUAL. **Agent Feed** will appear as a menu item.
 
-### Cursor
+### 4. Enable an agent integration
 
-Already wired via `~/.cursor/hooks.json` → `afterAgentResponse` → `~/.cursor/hooks/kindle-agent-inbox.py`  
-(project mirror: `.cursor/hooks.json` + `scripts/cursor-inbox-hook.py`)
+The default integration path is always the same: a `sessionStart` hook launches a small watcher that tails the session transcript. This captures human-readable progress updates as they appear, without relying on end-of-turn hooks.
 
-Agent id in the library: **`cursor`**.
+## How it works
+
+```text
+Agent updates
+     │
+     ▼
+Session-start hook
+     │
+     ▼
+inbox/sessions/<agent>-<session>/feed.md
+     │
+     ▼
+Page renderer ──► SSH ──► Kindle session library ──► KUAL reader
+```
+
+Every message is appended to a session feed. The renderer rebuilds its page images and pushes the updated library to the Kindle.
+
+## Integrations
 
 ### Codex
 
-Requires `[features] hooks = true` in `~/.codex/config.toml` (already set if you use other Codex hooks).
+Codex's standard hooks can run after tools or at the end of a turn, but they do not expose an event for assistant commentary. This integration starts a small local watcher at `SessionStart`; it follows that session's Codex transcript and forwards completed assistant messages as they appear.
 
-`~/.codex/hooks.json` wires:
+Add this command to your Codex `SessionStart` hooks in `~/.codex/hooks.json`:
 
-| Event | Why |
-|-------|-----|
-| **PostToolUse** | Mid-turn: Codex often emits assistant *commentary* between tools; `Stop` never sees those |
-| **Stop** | End of turn: drains transcript + `last_assistant_message` fallback (turns with no tools) |
-
-Both run `scripts/codex-midturn-hook.py`, which tails `transcript_path` from a watermark under `inbox/.codex-tail/` and dedupes by message id.
-
-First time (or after hook changes), open Codex TUI and run `/hooks` so the new commands are trusted.
-
-Smoke-test without a full Codex turn:
-
-```bash
-echo '{"session_id":"smoke-1","cwd":"/tmp","model":"test","last_assistant_message":"Hello from Codex smoke."}' \
-  | /usr/bin/python3 scripts/codex-stop-hook.py
+```json
+{
+  "type": "command",
+  "command": "/usr/bin/python3 '/absolute/path/to/kindle-agent/scripts/codex_session_start.py'",
+  "timeout": 10,
+  "statusMessage": "Starting Kindle session watcher"
+}
 ```
 
-Check `inbox/.codex-hook.log` and a new `inbox/sessions/codex-smoke-1/` folder. Push runs in the background if `config/kindle.env` is valid.
+Replace `/absolute/path/to/kindle-agent` with this repository's absolute path, then trust the changed hook through Codex's `/hooks` interface.
 
-## Rendering
+The watcher is safe to run with several Codex sessions at once:
 
-Mac-side only (no Kindle compute): `scripts/render_pages.py` uses **mistune** (real Markdown parser, tables/GFM plugins) → HTML → **PyMuPDF Story** pagination → grayscale PNGs. Dependencies in `requirements.txt`.
+- Each session gets its own watcher and transcript state.
+- A lock prevents duplicate watchers for the same session.
+- The watcher exits when its parent Codex process exits.
+- If that relationship is unavailable, it also exits after five minutes without transcript activity.
 
-Hooks call this automatically; you can also run it yourself:
+To check for active watchers:
 
 ```bash
-# all sessions
-./scripts/push-to-kindle.sh
-
-# one session
-./scripts/push-to-kindle.sh cursor-6cbd846b-f24d-4bdf-9703-457b6e5589d1
+pgrep -af codex_session_watch.py
 ```
 
-Logs: `inbox/.push.log`.
+No output means there are no active watchers. Per-session logs and locks live in `inbox/.codex-watch/`.
 
-## Kindle UX
+### Cursor
 
-1. KUAL → **Agent Feed → Open**
-2. **Library**: page keys move · tap opens a session · `*` = unread/updated · power quits
-3. **Reader**: page keys flip pages · tap (or upper key on page 1) returns to library · status strip shows `N/M` and `* new` when more pages arrived · power quits
+Cursor also supports `sessionStart`. Its live transcripts are JSONL files under `~/.cursor/projects/*/agent-transcripts/`, so use a session-start watcher here too—not `afterAgentResponse`.
 
-Pages are Mac-rendered PNGs shown with FBInk’s **default** (readable) waveform — not the fast `DU` mode (that made text look thin).
+Add this to `~/.cursor/hooks.json` (or `.cursor/hooks.json` for a project-only setup):
 
-While you are interacting, new pushes are noticed on the next keypress (`* new` / page-down at EOF). Mid-read pages do not flicker from a live push.
+```json
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "/usr/bin/python3 '/absolute/path/to/kindle-agent/scripts/cursor_session_start.py'",
+        "timeout": 10
+      }
+    ]
+  }
+}
+```
 
-| Key | Library | Reader |
-|-----|---------|--------|
-| Upper page (104) | Previous session | Previous page (or library on page 1) |
-| Lower page (109) | Next session | Next page |
-| Tap | Open session | Back to library |
-| Power | Quit | Quit |
+Cursor reloads `hooks.json` when it changes. The watcher reads only assistant text blocks from the transcript and ignores tool calls.
 
-## Sleep & battery
+## Kindle controls
 
-Agent Feed is **not** a background Kindle service. While it is open it holds `preventScreenSaver` so the screen stays on for reading.
+Open **KUAL → Agent Feed** on the Kindle:
 
-- **5 minutes of inactivity** (no page key / tap / power): the pager releases that hold and lets powerd sleep. The process stays resident; it does **not** kill `waitforkey` (doing so can wedge Oasis input).
-- **Any key after idle**: stay-awake is re-armed and the 5‑minute timer resets.
-- **Power quit**: clears the screensaver hold, resumes the stock UI, and returns home — normal Kindle sleep applies after that.
-- **Idle timeout** is `IDLE_SEC=300` in `device/extensions/agentfeed/bin/pager.sh`.
+- In the library, page keys move between sessions and tap opens one.
+- In a session, page keys turn pages and tap returns to the library.
+- The power button quits the reader.
 
-You do **not** need to keep the Kindle plugged in for normal use. Quit (or let it idle-sleep) when you are done. SSH pushes from the Mac only succeed while the Kindle is awake and on Wi‑Fi; there is no wake-on-agent-reply path.
+New pushes are noticed on the next interaction, avoiding disruptive refreshes while you read.
 
-## Inbox schema
+## Kindle setup
+
+The Kindle needs:
+
+1. A jailbreak with SSH access.
+2. [KUAL](http://kindlemodding.org), so it can expose the reader controls.
+3. Wi-Fi access to the machine running this repository.
+
+The included KUAL extension lives in `device/extensions/agentfeed/`.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| Nothing reaches the Kindle | Run `./scripts/discover-kindle.sh`, then verify `config/kindle.env` and that the Kindle is awake on the same network. |
+| Updates arrive only at the end | Confirm the agent's `sessionStart` watcher is configured. For Codex, also confirm the hook is trusted in `/hooks`. |
+| Duplicate messages | Check `pgrep -af 'session_watch.py'`; only one process should be watching a given session. |
+| A watcher remains after an agent closes | Wait a moment, then check `pgrep -af 'session_watch.py'`. It should stop with its parent process; the five-minute inactivity fallback covers orphaned processes. |
+| Kindle does not show the newest version | Reopen **KUAL → Agent Feed** and make sure the Kindle is awake on the same network. |
+
+## Development
+
+Run the watcher smoke test without contacting a Kindle:
+
+```bash
+python3 scripts/test_codex_session_watch.py
+python3 scripts/test_cursor_session_watch.py
+```
+
+Useful project paths:
 
 ```text
-inbox/
-  index.json
-  sessions.tsv                 # BusyBox-friendly: id|agent|title|HH:MM|pages|unread
-  sessions/<agent>-<conv>/
-    meta.json
-    feed.md
-    pages/page-NNNN.png
-    pages/manifest.json
+scripts/                  message ingestion, rendering, push, and watchers
+inbox/                    local JSONL message feed (ignored by Git)
+inbox/.codex-watch/       watcher logs, locks, and transcript cursors (ignored)
+device/extensions/        KUAL extension installed on the Kindle
+config/kindle.env         local Kindle credentials and destination (ignored)
 ```
 
-Producers should not special-case the Kindle — only write this layout (via `scripts/inbox_lib.py`).
+## Contributing
 
-## Why not a system service?
+Small, focused changes are welcome. Please keep integration behavior understandable, avoid committing local Kindle credentials or inbox content, and run the smoke test when changing the watcher.
 
-A launchd / Login Item daemon would mostly idle waiting for agent traffic. Hooks already fire at the right moment and exit. Keeping everything user-space means:
+## Security and privacy
 
-- no always-on process to babysit
-- no root LaunchDaemon
-- optional Login Item only if you later want a separate always-on helper (not needed today)
-
-## Useful paths
-
-| Path | Role |
-|------|------|
-| `config/kindle.env.example` | SSH target template (copy → `kindle.env`) |
-| `config/kindle.env` | Local SSH secrets (**gitignored**) |
-| `scripts/inbox_lib.py` | Shared ingest / index |
-| `scripts/render_pages.py` | Markdown → grayscale PNGs |
-| `scripts/push-to-kindle.sh` | Render + tar-over-SSH |
-| `scripts/codex-stop-hook.py` | Codex Stop producer |
-| `device/extensions/agentfeed/` | KUAL extension + pager |
-| `inbox/.hook.log` | Cursor hook log |
-| `inbox/.codex-hook.log` | Codex hook log |
-| `inbox/.push.log` | Push log |
+The feed can contain private agent conversations. Runtime messages, session images, watcher logs, Kindle credentials, and host keys are all excluded from Git by default. Review `git status` before committing and keep `config/kindle.env` local.
