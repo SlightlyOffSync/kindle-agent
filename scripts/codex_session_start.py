@@ -39,7 +39,7 @@ def main() -> int:
         "--model",
         str(payload.get("model") or ""),
         "--parent-pid",
-        str(os.getppid()),
+        str(int(payload.get("parent_pid") or os.getppid())),
     ]
     with log_path.open("a", encoding="utf-8") as log:
         subprocess.Popen(

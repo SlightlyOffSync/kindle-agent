@@ -3,7 +3,7 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "/usr/bin/python3 'REPLACE_WITH_REPO/scripts/cursor_session_start.py'",
+        "command": "uv run --directory 'REPLACE_WITH_REPO' python scripts/cursor_session_start.py",
         "timeout": 10
       }
     ]

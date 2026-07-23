@@ -23,7 +23,7 @@ def main() -> int:
         env = {**os.environ, "KINDLE_AGENT_INBOX": str(inbox)}
         proc = subprocess.Popen(
             [sys.executable, str(WATCHER), "--session-id", session_id, "--transcript-path", str(transcript),
-             "--parent-pid", str(os.getpid()), "--idle-seconds", "1", "--no-push"],
+             "--idle-seconds", "1", "--no-push"],
             cwd=ROOT,
             env=env,
         )

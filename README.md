@@ -22,7 +22,7 @@ Tool-call details and file diffs are intentionally not included: the feed is for
 
 ```bash
 cd kindle-agent
-python3 -m pip install -r requirements.txt
+uv sync
 ```
 
 ### 2. Configure Kindle access
@@ -76,6 +76,11 @@ Page renderer ──► SSH ──► Kindle session library ──► KUAL read
 
 Every message is appended to a session feed. The renderer rebuilds its page images and pushes the updated library to the Kindle.
 
+History is bounded by default: each session keeps about 24 KiB of its newest
+complete Markdown messages and exposes at most 15 rendered pages. Override
+`KINDLE_AGENT_MAX_FEED_BYTES` or `KINDLE_AGENT_MAX_PAGES` in
+`config/kindle.env` if you want different limits.
+
 ## Integrations
 
 ### Codex
@@ -87,7 +92,7 @@ Add this command to your Codex `SessionStart` hooks in `~/.codex/hooks.json`:
 ```json
 {
   "type": "command",
-  "command": "/usr/bin/python3 '/absolute/path/to/kindle-agent/scripts/codex_session_start.py'",
+  "command": "uv run --directory '/absolute/path/to/kindle-agent' python scripts/codex_session_start.py",
   "timeout": 10,
   "statusMessage": "Starting Kindle session watcher"
 }
@@ -122,7 +127,7 @@ Add this to `~/.cursor/hooks.json` (or `.cursor/hooks.json` for a project-only s
   "hooks": {
     "sessionStart": [
       {
-        "command": "/usr/bin/python3 '/absolute/path/to/kindle-agent/scripts/cursor_session_start.py'",
+        "command": "uv run --directory '/absolute/path/to/kindle-agent' python scripts/cursor_session_start.py",
         "timeout": 10
       }
     ]
@@ -167,8 +172,8 @@ The included KUAL extension lives in `device/extensions/agentfeed/`.
 Run the watcher smoke test without contacting a Kindle:
 
 ```bash
-python3 scripts/test_codex_session_watch.py
-python3 scripts/test_cursor_session_watch.py
+uv run python scripts/test_codex_session_watch.py
+uv run python scripts/test_cursor_session_watch.py
 ```
 
 Useful project paths:
@@ -184,6 +189,12 @@ config/kindle.env         local Kindle credentials and destination (ignored)
 ## Contributing
 
 Small, focused changes are welcome. Please keep integration behavior understandable, avoid committing local Kindle credentials or inbox content, and run the smoke test when changing the watcher.
+
+## License
+
+This is **vibe-coded** and released under the [MIT License](LICENSE). Use it, fork it, modify it, ship it, or turn it into something delightfully strange—do whatever you want with it.
+
+Thank you to the [KindleModding](http://kindlemodding.org) community and the KUAL maintainers for making jailbroken Kindle projects like this possible.
 
 ## Security and privacy
 

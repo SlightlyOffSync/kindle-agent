@@ -56,9 +56,10 @@ def main() -> int:
                 last_size, last_activity = path.stat().st_size, time.monotonic()
             if flush_cursor_transcript(session_id=args.session_id, transcript_path=args.transcript_path, cwd=args.cwd, model=args.model, push=not args.no_push):
                 last_activity = time.monotonic()
-            if args.parent_pid and not alive(args.parent_pid):
-                return 0
-            if time.monotonic() - last_activity >= args.idle_seconds:
+            if args.parent_pid:
+                if not alive(args.parent_pid):
+                    return 0
+            elif time.monotonic() - last_activity >= args.idle_seconds:
                 return 0
             time.sleep(0.5)
     finally:

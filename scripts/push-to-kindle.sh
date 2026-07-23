@@ -84,7 +84,7 @@ feed_fp() {
 }
 
 render_sessions() {
-  KINDLE_AGENT_ROOT="$ROOT" /usr/bin/python3 - <<'PY' "$ONLY_SID"
+  KINDLE_AGENT_ROOT="$ROOT" uv run --directory "$ROOT" python - <<'PY' "$ONLY_SID"
 import os
 import sys
 from pathlib import Path
@@ -111,7 +111,7 @@ for sid in targets:
     pages = d / "pages"
     import subprocess, json
     proc = subprocess.run(
-        ["/usr/bin/python3", str(ROOT / "scripts" / "render_pages.py"), str(feed), str(pages)],
+        ["uv", "run", "--directory", str(ROOT), "python", "scripts/render_pages.py", str(feed), str(pages)],
         capture_output=True, text=True,
     )
     if proc.returncode != 0:
@@ -258,9 +258,12 @@ KINDLE_SSH_HOST=${SSH_HOST}
 KINDLE_SSH_USER=${SSH_USER}
 KINDLE_SSH_PORT=${SSH_PORT}
 KINDLE_SSH_PASSWORD=${SSH_PASS}
+KINDLE_SSH_DEST=${SSH_DEST}
+KINDLE_AGENT_MAX_PAGES=${KINDLE_AGENT_MAX_PAGES:-15}
+KINDLE_AGENT_MAX_FEED_BYTES=${KINDLE_AGENT_MAX_FEED_BYTES:-24576}
 EOF
 chmod 600 "$CONFIG"
 
-n=$(/usr/bin/python3 -c 'import json;print(len(json.load(open("'"$INDEX"'")).get("sessions",[])))' 2>/dev/null || echo 0)
+n=$(uv run --directory "$ROOT" python -c 'import json;print(len(json.load(open("'"$INDEX"'")).get("sessions",[])))' 2>/dev/null || echo 0)
 log "ssh: pushed sessions=${n} only=${ONLY_SID:-all} passes=${pass} to ${SSH_USER}@${SSH_HOST}:${SSH_DEST}"
 exit 0

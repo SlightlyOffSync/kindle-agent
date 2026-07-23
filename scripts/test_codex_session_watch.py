@@ -29,8 +29,6 @@ def main() -> int:
                 "watcher-smoke",
                 "--transcript-path",
                 str(transcript),
-                "--parent-pid",
-                str(os.getpid()),
                 "--idle-seconds",
                 "1",
                 "--no-push",

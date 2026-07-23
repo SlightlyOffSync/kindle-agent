@@ -32,7 +32,8 @@ def main() -> int:
     with (watch_dir / f"{session_id}.log").open("a", encoding="utf-8") as log:
         subprocess.Popen(
             [sys.executable, str(WATCHER), "--session-id", session_id, "--transcript-path", transcript_path,
-             "--cwd", cwd, "--model", str(payload.get("model") or ""), "--parent-pid", str(os.getppid())],
+             "--cwd", cwd, "--model", str(payload.get("model") or ""),
+             "--parent-pid", str(int(payload.get("parent_pid") or os.getppid()))],
             stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
         )
     print("{}")

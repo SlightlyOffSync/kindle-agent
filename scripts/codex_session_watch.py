@@ -78,12 +78,13 @@ def main() -> int:
             )
             if added:
                 last_activity = time.monotonic()
-            if args.parent_pid and not process_is_alive(args.parent_pid):
-                return 0
-            # A defensive exit for hosts where the hook's parent PID is not
-            # the long-lived Codex process. A subsequent SessionStart/restart
-            # will create a fresh watcher and continue from the watermark.
-            if time.monotonic() - last_activity >= args.idle_seconds:
+            if args.parent_pid:
+                if not process_is_alive(args.parent_pid):
+                    return 0
+            elif time.monotonic() - last_activity >= args.idle_seconds:
+                # Idle expiry is only a fallback when no process owner was
+                # supplied. A valid SessionStart watcher follows its parent
+                # across arbitrarily long pauses between user prompts.
                 return 0
             time.sleep(POLL_SECONDS)
     finally:

@@ -40,6 +40,7 @@ LOAD_RETRIES=6
 LOAD_SLEEP_US=350000
 # Allow Kindle sleep after this many seconds with no key/touch activity.
 IDLE_SEC=300
+UPDATE_POLL_SEC=2
 
 KEY_PREV=104
 KEY_NEXT=109
@@ -58,7 +59,9 @@ SESSION_ID=""
 SEEN_MAX=1
 HAVE_NEW=0
 DISPLAYED_STAMP=""
+DISPLAYED_COUNT=0
 IGNORE_TAP_ONCE=0
+WAIT_KEY_RESULT=""
 
 log() { echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') $*" >>"${LOG}" 2>/dev/null; }
 
@@ -100,16 +103,16 @@ cleanup() { restore_ui; }
 trap cleanup EXIT INT TERM HUP
 
 fbink_msg() {
-	# Status strip — default waveform (readable text); hard timeout as safety.
+	# Status strip — wait for each update so it cannot collide with a page blit.
 	if [ -f "${FONT_REG}" ]; then
 		if [ -x /usr/bin/timeout ]; then
-			/usr/bin/timeout -s KILL 5 "${FBINK}" -k "top=${STATUS_TOP},left=0,width=1264,height=70" >/dev/null 2>&1
-			/usr/bin/timeout -s KILL 5 "${FBINK}" -q \
+			/usr/bin/timeout -s KILL 5 "${FBINK}" -w -k "top=${STATUS_TOP},left=0,width=1264,height=70" >/dev/null 2>&1
+			/usr/bin/timeout -s KILL 5 "${FBINK}" -q -w \
 				-t "regular=${FONT_REG},size=${STATUS_SIZE},top=${STATUS_TOP},bottom=12,left=40,right=40" \
 				"$1" >/dev/null 2>&1
 		else
-			"${FBINK}" -k "top=${STATUS_TOP},left=0,width=1264,height=70" >/dev/null 2>&1
-			"${FBINK}" -q \
+			"${FBINK}" -w -k "top=${STATUS_TOP},left=0,width=1264,height=70" >/dev/null 2>&1
+			"${FBINK}" -q -w \
 				-t "regular=${FONT_REG},size=${STATUS_SIZE},top=${STATUS_TOP},bottom=12,left=40,right=40" \
 				"$1" >/dev/null 2>&1
 		fi
@@ -277,30 +280,33 @@ wait_for_page_file() {
 	return 1
 }
 
-# Lightweight stamp — no grep -o (can wedge BusyBox edge cases); manifest is tiny.
+# Fingerprint the manifest contents. Its byte length often stays constant when
+# only the timestamp/page data changes, so wc -c is not a sufficient stamp.
 content_stamp_for() {
 	mf="$(session_pages_dir "$1")/manifest.json"
 	if [ -f "${mf}" ]; then
-		# single line fingerprint
-		wc -c <"${mf}" | tr -d ' '
+		cksum "${mf}" | awk '{print $1 ":" $2}'
 	else
 		echo "0"
 	fi
 }
 
 display_image() {
-	# Default waveform (GC16-class) for readable text — no DU.
+	# Clear and draw in one synchronized GC16 update. Separate asynchronous
+	# clear/blit calls can collide and leave stale gray framebuffer bands.
 	# Hard timeout so a stuck blit cannot wedge the key loop forever
 	# (BusyBox timeout supports -s KILL, not GNU -k).
 	f="$1"
 	if [ -x /usr/bin/timeout ]; then
 		/usr/bin/timeout -s KILL 12 \
-			"${FBINK}" -g "file=${f},halign=center,valign=center" \
-			>/dev/null 2>&1 && return 0
+			"${FBINK}" -c -w -W GC16 -a \
+				-g "file=${f},halign=center,valign=center" \
+				>/dev/null 2>&1 && return 0
 		/usr/bin/timeout -s KILL 12 \
 			"${EIPS}" -g "${f}" >/dev/null 2>&1 && return 0
 	else
-		"${FBINK}" -g "file=${f},halign=center,valign=center" >/dev/null 2>&1 && return 0
+		"${FBINK}" -c -w -W GC16 -a \
+			-g "file=${f},halign=center,valign=center" >/dev/null 2>&1 && return 0
 		[ -x "${EIPS}" ] && "${EIPS}" -g "${f}" >/dev/null 2>&1 && return 0
 	fi
 	return 1
@@ -311,37 +317,46 @@ reader_status_text() {
 	count=${count:-0}
 	status="${PAGE}/${count}"
 	if [ "${HAVE_NEW}" -eq 1 ]; then
-		status="${status}  * new  (page down)"
+		if [ "${count}" -gt "${PAGE}" ]; then
+			status="${status}  * new  (page down)"
+		else
+			status="${status}  * updated"
+		fi
 	fi
 	status="${status}  | tap=sessions  power=quit"
 	echo "${status}"
 }
 
-# Soft-check for newly pushed content without full page redraw.
+# Check for a newly swapped render. If the user was on the old last page,
+# redraw that page in place; otherwise preserve their current page and only
+# show the status marker.
 poll_reader_updates() {
 	[ "${MODE}" = "reader" ] || return 0
 	[ -n "${SESSION_ID}" ] || return 0
 	count=$(page_count_for "${SESSION_ID}")
 	count=${count:-0}
 	stamp=$(content_stamp_for "${SESSION_ID}")
-	new=0
-	if [ "${count}" -gt "${PAGE}" ]; then
-		new=1
-	elif [ "${count}" -eq "${PAGE}" ] && [ -n "${stamp}" ] && [ "${stamp}" != "${DISPLAYED_STAMP}" ]; then
-		new=1
-	fi
-	if [ "${new}" -eq 1 ]; then
-		if [ "${HAVE_NEW}" -ne 1 ]; then
-			HAVE_NEW=1
-			fbink_msg "$(reader_status_text)"
-			log "poll *new page=${PAGE} count=${count}"
+	[ -n "${stamp}" ] || return 0
+	[ "${stamp}" != "${DISPLAYED_STAMP}" ] || return 0
+
+	was_last=0
+	[ "${PAGE}" -eq "${DISPLAYED_COUNT}" ] && was_last=1
+	HAVE_NEW=1
+
+	if [ "${was_last}" -eq 1 ]; then
+		f=$(page_file "${PAGE}")
+		if [ -f "${f}" ]; then
+			if display_image "${f}"; then
+				log "poll refreshed page=${PAGE} count=${count}"
+			else
+				log "poll refresh failed page=${PAGE} file=${f}"
+			fi
 		fi
-	else
-		if [ "${HAVE_NEW}" -eq 1 ]; then
-			HAVE_NEW=0
-			fbink_msg "$(reader_status_text)"
-		fi
 	fi
+	DISPLAYED_STAMP="${stamp}"
+	DISPLAYED_COUNT=${count}
+	fbink_msg "$(reader_status_text)"
+	save_state
 }
 
 # --- drawing ---
@@ -418,6 +433,7 @@ show_reader_page() {
 
 	[ "${PAGE}" -gt "${SEEN_MAX}" ] && SEEN_MAX=${PAGE}
 	DISPLAYED_STAMP=$(content_stamp_for "${SESSION_ID}")
+	DISPLAYED_COUNT=${count}
 	HAVE_NEW=0
 	# Status strip only — skip heavy prefetch (was stalling page-flips on FAT)
 	fbink_msg "$(reader_status_text)"
@@ -486,6 +502,7 @@ wait_key() {
 	wp=$!
 	waited=0
 	slept=0
+	poll_waited=0
 	while true; do
 		if [ -s "${keyf}" ] || ! kill -0 "${wp}" 2>/dev/null; then
 			wait "${wp}" 2>/dev/null
@@ -512,7 +529,7 @@ wait_key() {
 			# Page-turn keys: key-down only
 			if [ "${code}" = "${KEY_PREV}" ] || [ "${code}" = "${KEY_NEXT}" ]; then
 				if [ "${state}" = "1" ]; then
-					echo "${code}"
+					WAIT_KEY_RESULT="${code}"
 					return 0
 				fi
 				waitforkey >"${keyf}" 2>/dev/null &
@@ -521,12 +538,12 @@ wait_key() {
 			fi
 			# Power / home / back
 			if [ "${code}" = "${KEY_POWER}" ] || [ "${code}" = "${KEY_HOME}" ] || [ "${code}" = "${KEY_MENU}" ] || [ "${code}" = "${KEY_BACK}" ]; then
-				echo "${code}"
+				WAIT_KEY_RESULT="${code}"
 				return 0
 			fi
 			# Touch
 			if [ "${code}" = "${KEY_TAP1}" ] || [ "${code}" = "${KEY_TAP2}" ]; then
-				echo "${code}"
+				WAIT_KEY_RESULT="${code}"
 				return 0
 			fi
 			waitforkey >"${keyf}" 2>/dev/null &
@@ -535,6 +552,11 @@ wait_key() {
 		fi
 
 		sleep 1
+		poll_waited=$((poll_waited + 1))
+		if [ "${poll_waited}" -ge "${UPDATE_POLL_SEC}" ]; then
+			poll_reader_updates
+			poll_waited=0
+		fi
 		waited=$((waited + 1))
 		if [ "${slept}" -eq 0 ] && [ "${waited}" -ge "${IDLE_SEC}" ]; then
 			allow_sleep
@@ -566,7 +588,9 @@ draw_library
 log "start library sel=${SEL} sessions=$(list_len)"
 
 while true; do
-	key=$(wait_key)
+	WAIT_KEY_RESULT=""
+	wait_key
+	key="${WAIT_KEY_RESULT}"
 	log "key=${key} mode=${MODE} sel=${SEL} page=${PAGE} sid=${SESSION_ID}"
 
 	case "${key}" in

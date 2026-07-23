@@ -8,6 +8,7 @@ No hand-rolled Markdown grammar.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -16,6 +17,8 @@ from pathlib import Path
 import fitz
 import mistune
 from PIL import Image
+
+from inbox_lib import trim_feed
 
 ROOT = Path(__file__).resolve().parents[1]
 FONT_DIR = ROOT / "fonts"
@@ -35,6 +38,16 @@ SIZE_CODE = 30
 SIZE_H1 = 46
 SIZE_H2 = 40
 SIZE_H3 = 36
+DEFAULT_MAX_PAGES = 15
+
+
+def max_pages_from_env() -> int:
+    """Return the configured page-history limit, with a safe default."""
+    raw = os.environ.get("KINDLE_AGENT_MAX_PAGES", str(DEFAULT_MAX_PAGES))
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return DEFAULT_MAX_PAGES
 
 
 def _font_face(filename: str, family: str, weight: str | None = None, style: str | None = None) -> str:
@@ -166,8 +179,12 @@ img {{
 """
 
 
-def html_to_png_pages(html: str, out_dir: Path) -> int:
-    """Paginate HTML with PyMuPDF Story and write page-NNNN.png grayscale files."""
+def html_to_png_pages(html: str, out_dir: Path, max_pages: int) -> tuple[int, int]:
+    """Paginate HTML and write only the newest ``max_pages`` PNG pages.
+
+    Returns ``(pages_written, source_pages)``. Retained pages are renumbered
+    from one so the Kindle pager never needs to understand a sliding offset.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in out_dir.glob("page-*.png"):
         try:
@@ -202,23 +219,29 @@ def html_to_png_pages(html: str, out_dir: Path) -> int:
         writer.close()
 
         doc = fitz.open(str(pdf_path))
-        n = doc.page_count
-        for i in range(n):
-            pix = doc[i].get_pixmap(colorspace=fitz.csGRAY, alpha=False)
+        source_pages = doc.page_count
+        first_page = max(0, source_pages - max_pages)
+        retained_pages = source_pages - first_page
+        for output_index, source_index in enumerate(range(first_page, source_pages), start=1):
+            pix = doc[source_index].get_pixmap(colorspace=fitz.csGRAY, alpha=False)
             img = Image.frombytes("L", (pix.width, pix.height), pix.samples)
             if img.size != (WIDTH, HEIGHT):
                 img = img.resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
-            img.save(out_dir / f"page-{i + 1:04d}.png", format="PNG", optimize=True)
+            img.save(out_dir / f"page-{output_index:04d}.png", format="PNG", optimize=True)
         doc.close()
-    return n
+    return retained_pages, source_pages
 
 
 def render(feed_path: Path, out_dir: Path) -> dict:
+    trim_feed(feed_path)
     md = feed_path.read_text(encoding="utf-8") if feed_path.exists() else ""
     html = md_to_html(md)
-    pages = html_to_png_pages(html, out_dir)
+    max_pages = max_pages_from_env()
+    pages, source_pages = html_to_png_pages(html, out_dir, max_pages)
     manifest = {
         "pages": pages,
+        "source_pages": source_pages,
+        "max_pages": max_pages,
         "width": WIDTH,
         "height": HEIGHT,
         "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),

@@ -20,6 +20,10 @@ INBOX = Path(os.environ.get("KINDLE_AGENT_INBOX", ROOT / "inbox")).expanduser()
 SESSIONS = INBOX / "sessions"
 INDEX = INBOX / "index.json"
 INGEST_LOCK = INBOX / ".ingest.lock"
+DEFAULT_MAX_FEED_BYTES = 24 * 1024
+ENTRY_START_RE = re.compile(
+    r"(?m)^(?=\*\*[^*\n]+\*\* · \d{2}:\d{2}\n(?:\n|$))"
+)
 
 
 def utc_now() -> datetime:
@@ -57,6 +61,48 @@ def read_json(path: Path, default: object) -> object:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return default
+
+
+def max_feed_bytes_from_env() -> int:
+    """Return the Markdown history ceiling, with a safe default."""
+    raw = os.environ.get("KINDLE_AGENT_MAX_FEED_BYTES", str(DEFAULT_MAX_FEED_BYTES))
+    try:
+        return max(1024, int(raw))
+    except ValueError:
+        return DEFAULT_MAX_FEED_BYTES
+
+
+def trim_feed(path: Path, max_bytes: int | None = None) -> bool:
+    """Keep the newest complete agent entries within the feed byte ceiling.
+
+    A single oversized newest entry is preserved whole. This favors valid,
+    readable Markdown over cutting through a table or fenced code block.
+    """
+    if not path.exists():
+        return False
+    limit = max_bytes if max_bytes is not None else max_feed_bytes_from_env()
+    text = path.read_text(encoding="utf-8")
+    if len(text.encode("utf-8")) <= limit:
+        return False
+
+    starts = [match.start() for match in ENTRY_START_RE.finditer(text)]
+    if not starts:
+        return False
+    chunks = [
+        text[start : starts[index + 1] if index + 1 < len(starts) else len(text)]
+        for index, start in enumerate(starts)
+    ]
+    kept: list[str] = []
+    kept_bytes = 0
+    for chunk in reversed(chunks):
+        chunk_bytes = len(chunk.encode("utf-8"))
+        if kept and kept_bytes + chunk_bytes > limit:
+            break
+        kept.append(chunk)
+        kept_bytes += chunk_bytes
+    trimmed = "".join(reversed(kept))
+    path.write_text(trimmed, encoding="utf-8")
+    return True
 
 
 def update_session_meta(
@@ -168,6 +214,8 @@ def append_feed(sid: str, entry: str) -> Path:
             f.write(entry)
         with legacy.open("a", encoding="utf-8") as f:
             f.write(entry)
+        trim_feed(feed)
+        trim_feed(legacy)
 
     # Serialize appends across concurrent end-of-turn hooks.
     if fcntl is None:
