@@ -1,0 +1,4 @@
+mistune>=3.0.2
+pymupdf>=1.24
+Pillow>=10
+Pygments>=2.15
