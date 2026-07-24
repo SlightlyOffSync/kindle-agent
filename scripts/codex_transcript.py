@@ -13,7 +13,16 @@ import json
 import re
 from pathlib import Path
 
-from inbox_lib import INBOX, ingest_agent_message, trigger_push
+from inbox_lib import (
+    INBOX,
+    count_file_lines,
+    ingest_agent_message,
+    maybe_generate_title,
+    rebuild_index,
+    session_id_for,
+    trigger_push,
+    update_session_meta,
+)
 
 STATE_DIR = INBOX / ".codex-tail"
 MIN_CHARS = 1
@@ -51,6 +60,7 @@ def _load_state(session_id: str) -> dict:
     return {
         "offset": int(data.get("offset") or 0),
         "seen_ids": list(data.get("seen_ids") or [])[-400:],
+        "transcript_lines": data.get("transcript_lines"),
     }
 
 
@@ -124,6 +134,12 @@ def flush_codex_transcript(
             f.seek(offset)
             chunk = f.read()
             new_offset = f.tell()
+        previous_lines = state.get("transcript_lines")
+        if not isinstance(previous_lines, int) or offset == 0:
+            transcript_lines = count_file_lines(path)
+        else:
+            transcript_lines = previous_lines + chunk.count("\n")
+        state["transcript_lines"] = transcript_lines
         for item in _assistant_items_from_chunk(chunk):
             if item["id"] in seen:
                 continue
@@ -137,6 +153,17 @@ def flush_codex_transcript(
             seen.add(item["id"])
             added += 1
         state["offset"] = new_offset
+        sid = sid or session_id_for("codex", session_id)
+        update_session_meta(
+            sid,
+            agent="codex",
+            conversation_id=session_id,
+            cwd=cwd,
+            model=model,
+            transcript_lines=transcript_lines,
+            touch=False,
+        )
+        maybe_generate_title(sid, path, transcript_lines)
 
     # Stop fallback: final message may not yet be in transcript, or turn had no tools.
     if fallback_text and isinstance(fallback_text, str) and fallback_text.strip():
@@ -168,6 +195,7 @@ def flush_codex_transcript(
     _save_state(session_id, state)
 
     if added and push and sid:
+        rebuild_index()
         trigger_push(sid)
     elif added and push:
         trigger_push(f"codex-{session_id}")

@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,6 +22,7 @@ SESSIONS = INBOX / "sessions"
 INDEX = INBOX / "index.json"
 INGEST_LOCK = INBOX / ".ingest.lock"
 DEFAULT_MAX_FEED_BYTES = 24 * 1024
+DEFAULT_TITLE_INTERVAL_LINES = 500
 ENTRY_START_RE = re.compile(
     r"(?m)^(?=\*\*[^*\n]+\*\* · \d{2}:\d{2}\n(?:\n|$))"
 )
@@ -72,6 +74,14 @@ def max_feed_bytes_from_env() -> int:
         return DEFAULT_MAX_FEED_BYTES
 
 
+def title_interval_from_env() -> int:
+    raw = os.environ.get("KINDLE_AGENT_TITLE_INTERVAL_LINES", str(DEFAULT_TITLE_INTERVAL_LINES))
+    try:
+        return max(50, int(raw))
+    except ValueError:
+        return DEFAULT_TITLE_INTERVAL_LINES
+
+
 def trim_feed(path: Path, max_bytes: int | None = None) -> bool:
     """Keep the newest complete agent entries within the feed byte ceiling.
 
@@ -114,6 +124,9 @@ def update_session_meta(
     model: str | None = None,
     title: str | None = None,
     pages: int | None = None,
+    transcript_lines: int | None = None,
+    title_status: str | None = None,
+    title_at_lines: int | None = None,
     unread: bool | None = None,
     touch: bool = True,
 ) -> dict:
@@ -138,6 +151,7 @@ def update_session_meta(
         meta["conversation_id"] = conversation_id
     if cwd is not None:
         meta["cwd"] = cwd
+        meta["folder"] = title_from_cwd(cwd)
     if model is not None:
         meta["model"] = model
     if title is not None:
@@ -146,6 +160,12 @@ def update_session_meta(
         meta["title"] = title_from_cwd(str(meta.get("cwd") or ""))
     if pages is not None:
         meta["pages"] = pages
+    if transcript_lines is not None:
+        meta["transcript_lines"] = max(0, transcript_lines)
+    if title_status is not None:
+        meta["title_status"] = title_status
+    if title_at_lines is not None:
+        meta["title_at_lines"] = max(0, title_at_lines)
     if unread is not None:
         meta["unread"] = unread
     if touch or not meta.get("updated_at"):
@@ -187,16 +207,18 @@ def rebuild_index() -> dict:
     index = {"updated_at": utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"), "sessions": items}
     write_json(INDEX, index)
 
-    # BusyBox-friendly list: id|agent|title|HH:MM|pages|unread
+    # BusyBox-friendly list:
+    # id|title|agent|folder|HH:MM|transcript_lines|unread
     lines = []
     for m in items:
         hm = _hm_local(str(m.get("updated_at") or ""))
         title = str(m.get("title") or "untitled").replace("|", "/")
         agent = str(m.get("agent") or "?")
-        pages = int(m.get("pages") or 0)
+        folder = str(m.get("folder") or title_from_cwd(str(m.get("cwd") or ""))).replace("|", "/")
+        transcript_lines = int(m.get("transcript_lines") or 0)
         unread = "1" if m.get("unread") else "0"
         lines.append(
-            f"{m.get('id')}|{agent}|{title}|{hm}|{pages}|{unread}"
+            f"{m.get('id')}|{title}|{agent}|{folder}|{hm}|{transcript_lines}|{unread}"
         )
     (INBOX / "sessions.tsv").write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
     return index
@@ -266,6 +288,49 @@ def ingest_agent_message(
         entry, encoding="utf-8"
     )
     return sid
+
+
+def count_file_lines(path: Path) -> int:
+    """Count lines without loading a potentially large transcript at once."""
+    count = 0
+    last = b""
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            count += chunk.count(b"\n")
+            last = chunk[-1:]
+    return count + (1 if last and last != b"\n" else 0)
+
+
+def maybe_generate_title(sid: str, transcript_path: Path, transcript_lines: int) -> None:
+    """Start a detached initial or periodic title-generation attempt."""
+    if os.environ.get("KINDLE_AGENT_TITLE_ENABLED", "1").lower() in {"0", "false", "no"}:
+        return
+    meta_path = session_dir(sid) / "meta.json"
+    meta = read_json(meta_path, {})
+    if not isinstance(meta, dict):
+        return
+    status = str(meta.get("title_status") or "")
+    if status == "pending":
+        return
+    last_attempt = int(meta.get("title_attempt_lines") or 0)
+    if status in {"generated", "failed"}:
+        if transcript_lines - last_attempt < title_interval_from_env():
+            return
+    mode = "refresh" if status else "initial"
+    meta["title_status"] = "pending"
+    meta["title_attempt_lines"] = transcript_lines
+    write_json(meta_path, meta)
+    worker = ROOT / "scripts" / "generate_title.py"
+    log_dir = INBOX / ".title"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    with (log_dir / f"{sid}.log").open("a", encoding="utf-8") as log:
+        subprocess.Popen(
+            [sys.executable, str(worker), sid, str(transcript_path), str(transcript_lines), mode],
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+            start_new_session=True,
+        )
 
 
 def trigger_push(session_id: str | None = None) -> None:

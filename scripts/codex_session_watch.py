@@ -51,6 +51,7 @@ def main() -> int:
     watch_dir = INBOX / ".codex-watch"
     watch_dir.mkdir(parents=True, exist_ok=True)
     lock_path = watch_dir / f"{args.session_id}.lock"
+    stop_path = watch_dir / f"{args.session_id}.stop"
     lock = lock_path.open("a+", encoding="utf-8")
     if fcntl is not None:
         try:
@@ -63,6 +64,8 @@ def main() -> int:
     last_size = -1
     try:
         while True:
+            if stop_path.exists():
+                return 0
             path = Path(transcript_path) if transcript_path else None
             if path is not None and path.is_file():
                 size = path.stat().st_size
@@ -91,10 +94,6 @@ def main() -> int:
         if fcntl is not None:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
         lock.close()
-        try:
-            lock_path.unlink()
-        except FileNotFoundError:
-            pass
 
 
 if __name__ == "__main__":

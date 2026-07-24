@@ -156,29 +156,30 @@ session_count() {
 	fi
 }
 
-# Build flat list files for BusyBox from sessions.tsv (id|agent|title|HH:MM|pages|unread)
+# Build flat list files for BusyBox from sessions.tsv:
+# id|title|agent|folder|HH:MM|transcript_lines|unread
 rebuild_lists() {
 	IDS="${ROOT}/.ids"
-	AGENTS="${ROOT}/.agents"
+	TITLES="${ROOT}/.titles"
 	METAS="${ROOT}/.metas"
 	: >"${IDS}"
-	: >"${AGENTS}"
+	: >"${TITLES}"
 	: >"${METAS}"
 	TSV="${ROOT}/sessions.tsv"
 	if [ -f "${TSV}" ]; then
-		while IFS='|' read -r id agent title hm pages unread; do
+		while IFS='|' read -r id title agent folder hm transcript_lines unread; do
 			[ -n "${id}" ] || continue
 			echo "${id}" >>"${IDS}"
 			mark=""
 			[ "${unread}" = "1" ] && mark="* "
-			# Hide * if opened at this page count (simple; avoids heavy stamp work)
+			# Hide * if this exact transcript length was already opened.
 			if [ -n "${mark}" ] && [ -f "${ROOT}/.openstamp" ]; then
-				if grep -q "^${id}|${pages}$" "${ROOT}/.openstamp" 2>/dev/null; then
+				if grep -Fqx "${id}|${transcript_lines}" "${ROOT}/.openstamp" 2>/dev/null; then
 					mark=""
 				fi
 			fi
-			echo "${mark}${agent}" >>"${AGENTS}"
-			echo "${title}  ·  ${hm}  ·  p${pages}" >>"${METAS}"
+			echo "${mark}${title}" >>"${TITLES}"
+			echo "${agent}  ·  ${folder}  ·  ${hm}  ·  ${transcript_lines} lines" >>"${METAS}"
 		done <"${TSV}"
 	fi
 	if [ ! -s "${IDS}" ]; then
@@ -187,11 +188,11 @@ rebuild_lists() {
 			sid=$(basename "$d")
 			case "${sid}" in
 				._*) continue ;;
-			esac
-			echo "$sid" >>"${IDS}"
-			echo "${sid}" >>"${AGENTS}"
-			echo "" >>"${METAS}"
-		done
+				esac
+				echo "$sid" >>"${IDS}"
+				echo "${sid}" >>"${TITLES}"
+				echo "" >>"${METAS}"
+			done
 	fi
 }
 
@@ -204,8 +205,8 @@ id_at() {
 	sed -n "$(($1 + 1))p" "${ROOT}/.ids" 2>/dev/null
 }
 
-agent_at() {
-	sed -n "$(($1 + 1))p" "${ROOT}/.agents" 2>/dev/null
+title_at() {
+	sed -n "$(($1 + 1))p" "${ROOT}/.titles" 2>/dev/null
 }
 
 meta_at() {
@@ -384,14 +385,14 @@ draw_library() {
 	else
 		i=0
 		while [ "$i" -lt "$n" ]; do
-			agent=$(agent_at "$i")
+			title=$(title_at "$i")
 			meta=$(meta_at "$i")
 			if [ "$i" -eq "${SEL}" ]; then
-				agent_line="> ${agent}"
+				title_line="> ${title}"
 			else
-				agent_line="  ${agent}"
+				title_line="  ${title}"
 			fi
-			fbink_line "${LIB_AGENT_SIZE}" "${top}" "${agent_line}" bold
+			fbink_line "${LIB_AGENT_SIZE}" "${top}" "${title_line}" bold
 			fbink_line "${LIB_META_SIZE}" "$((top + LIB_AGENT_GAP))" "    ${meta}"
 			top=$((top + LIB_ROW_STEP))
 			i=$((i + 1))
@@ -458,8 +459,9 @@ open_selected() {
 	# Start at latest page
 	PAGE=${count}
 	SEEN_MAX=${PAGE}
-	# Record opened at this page count (for * clearing)
-	printf '%s|%s\n' "${SESSION_ID}" "${count}" >>"${ROOT}/.openstamp"
+	# Record opened at this transcript length (for * clearing).
+	transcript_lines=$(awk -F'|' -v id="${SESSION_ID}" '$1 == id { print $6; exit }' "${ROOT}/sessions.tsv" 2>/dev/null)
+	printf '%s|%s\n' "${SESSION_ID}" "${transcript_lines:-0}" >>"${ROOT}/.openstamp"
 	log "open session=${SESSION_ID} page=${PAGE} count=${count}"
 	# Let touch release settle so it is not handled as "back to library"
 	usleep 250000 2>/dev/null || sleep 1

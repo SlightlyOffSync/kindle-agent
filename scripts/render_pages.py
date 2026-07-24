@@ -132,11 +132,12 @@ code, pre {{
   font-size: {SIZE_CODE}px;
 }}
 code {{
-  background: #eee;
-  padding: 0 0.2em;
+  background: transparent;
+  padding: 0;
 }}
 pre {{
-  background: #ebebeb;
+  background: transparent;
+  border-left: 3px solid #777;
   padding: 0.6em 0.7em;
   white-space: pre-wrap;
   word-break: break-word;
@@ -158,7 +159,7 @@ th, td {{
   text-align: left;
 }}
 th {{
-  background: #e0e0e0;
+  background: transparent;
   font-weight: bold;
 }}
 hr {{

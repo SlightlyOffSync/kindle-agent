@@ -7,7 +7,16 @@ import json
 import re
 from pathlib import Path
 
-from inbox_lib import INBOX, ingest_agent_message, trigger_push
+from inbox_lib import (
+    INBOX,
+    count_file_lines,
+    ingest_agent_message,
+    maybe_generate_title,
+    rebuild_index,
+    session_id_for,
+    trigger_push,
+    update_session_meta,
+)
 
 STATE_DIR = INBOX / ".cursor-tail"
 
@@ -19,7 +28,11 @@ def _load_state(session_id: str) -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         data = {}
-    return {"offset": int(data.get("offset") or 0), "seen_ids": list(data.get("seen_ids") or [])[-400:]}
+    return {
+        "offset": int(data.get("offset") or 0),
+        "seen_ids": list(data.get("seen_ids") or [])[-400:],
+        "transcript_lines": data.get("transcript_lines"),
+    }
 
 
 def _save_state(session_id: str, state: dict) -> None:
@@ -70,6 +83,12 @@ def flush_cursor_transcript(*, session_id: str, transcript_path: str, cwd: str =
         handle.seek(offset)
         chunk = handle.read()
         state["offset"] = handle.tell()
+    previous_lines = state.get("transcript_lines")
+    if not isinstance(previous_lines, int) or offset == 0:
+        transcript_lines = count_file_lines(path)
+    else:
+        transcript_lines = previous_lines + chunk.count("\n")
+    state["transcript_lines"] = transcript_lines
     seen = set(state["seen_ids"])
     added = 0
     sid = ""
@@ -81,6 +100,18 @@ def flush_cursor_transcript(*, session_id: str, transcript_path: str, cwd: str =
         added += 1
     state["seen_ids"] = list(seen)[-400:]
     _save_state(session_id, state)
+    sid = sid or session_id_for("cursor", session_id)
+    update_session_meta(
+        sid,
+        agent="cursor",
+        conversation_id=session_id,
+        cwd=cwd,
+        model=model,
+        transcript_lines=transcript_lines,
+        touch=False,
+    )
+    maybe_generate_title(sid, path, transcript_lines)
     if added and push:
+        rebuild_index()
         trigger_push(sid or f"cursor-{session_id}")
     return added

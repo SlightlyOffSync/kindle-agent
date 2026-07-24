@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -20,7 +21,11 @@ def main() -> int:
         inbox = Path(temp) / "inbox"
         transcript = Path(temp) / "session.jsonl"
         transcript.write_text("", encoding="utf-8")
-        env = {**os.environ, "KINDLE_AGENT_INBOX": str(inbox)}
+        env = {
+            **os.environ,
+            "KINDLE_AGENT_INBOX": str(inbox),
+            "KINDLE_AGENT_TITLE_ENABLED": "0",
+        }
         proc = subprocess.Popen(
             [sys.executable, str(WATCHER), "--session-id", session_id, "--transcript-path", str(transcript),
              "--idle-seconds", "1", "--no-push"],
@@ -37,6 +42,11 @@ def main() -> int:
         if not feed.exists() or "Cursor watcher smoke message" not in feed.read_text(encoding="utf-8"):
             proc.terminate()
             raise RuntimeError("watcher did not ingest the live Cursor transcript")
+        meta = json.loads(
+            (inbox / "sessions" / f"cursor-{session_id}" / "meta.json").read_text(encoding="utf-8")
+        )
+        if meta.get("transcript_lines") != 1:
+            raise RuntimeError("Cursor transcript line count was not recorded")
         if proc.wait(timeout=3) != 0:
             raise RuntimeError("watcher did not exit cleanly")
     print("PASS: Cursor watcher reads a live transcript and exits after inactivity")

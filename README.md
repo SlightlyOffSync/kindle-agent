@@ -81,20 +81,70 @@ complete Markdown messages and exposes at most 15 rendered pages. Override
 `KINDLE_AGENT_MAX_FEED_BYTES` or `KINDLE_AGENT_MAX_PAGES` in
 `config/kindle.env` if you want different limits.
 
+The Kindle library shows a short conversation title followed by the agent,
+working folder, update time, and total source-transcript line count. A detached
+`pi` call generates the first title, then refreshes it every 500 new transcript
+lines from the most recent 300 lines. It uses `openai-codex/gpt-5.6-luna` with
+thinking disabled, no tools, no project context, and no saved Pi session. Only
+user/assistant conversation text is sent; system instructions and tool payloads
+are excluded, and the bounded excerpt is piped over stdin instead of exposed in
+the subprocess command line.
+
+Using each tailed agent's own batch CLI sounds attractive, but isolation is not
+portable: Claude and Codex support ephemeral runs, while Cursor and OpenCode
+currently persist generated sessions and could recursively enter the feed.
+Pi is therefore the predictable cross-agent default. Set
+`KINDLE_AGENT_TITLE_ENABLED=0` to keep folder-name titles, or override
+`KINDLE_AGENT_TITLE_MODEL`, `KINDLE_AGENT_TITLE_INTERVAL_LINES`, and
+`KINDLE_AGENT_TITLE_TAIL_LINES` in `config/kindle.env`.
+
 ## Integrations
 
 ### Codex
 
 Codex's standard hooks can run after tools or at the end of a turn, but they do not expose an event for assistant commentary. This integration starts a small local watcher at `SessionStart`; it follows that session's Codex transcript and forwards completed assistant messages as they appear.
 
-Add this command to your Codex `SessionStart` hooks in `~/.codex/hooks.json`:
+Add these commands to `~/.codex/hooks.json`:
 
 ```json
 {
-  "type": "command",
-  "command": "uv run --directory '/absolute/path/to/kindle-agent' python scripts/codex_session_start.py",
-  "timeout": 10,
-  "statusMessage": "Starting Kindle session watcher"
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --directory '/absolute/path/to/kindle-agent' python scripts/codex_session_start.py",
+            "timeout": 10,
+            "statusMessage": "Starting Kindle session watcher"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --directory '/absolute/path/to/kindle-agent' python scripts/codex_session_end.py",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --directory '/absolute/path/to/kindle-agent' python scripts/codex_session_start.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -104,8 +154,9 @@ The watcher is safe to run with several Codex sessions at once:
 
 - Each session gets its own watcher and transcript state.
 - A lock prevents duplicate watchers for the same session.
-- The watcher exits when its parent Codex process exits.
-- If that relationship is unavailable, it also exits after five minutes without transcript activity.
+- `UserPromptSubmit` restarts a watcher that expired while the session was idle.
+- `SessionEnd` stops the matching watcher, including sessions started by resume.
+- If Codex exits without firing `SessionEnd`, the watcher exits after five minutes without transcript activity.
 
 To check for active watchers:
 
