@@ -19,7 +19,8 @@ from inbox_lib import (
 )
 
 DEFAULT_MODEL = "openai-codex/gpt-5.6-luna"
-MAX_SOURCE_LINES = 300
+INITIAL_SOURCE_LINES = 300
+DEFAULT_TAIL_LINES = 100
 MAX_EXCERPT_CHARS = 8_000
 
 
@@ -66,17 +67,17 @@ def transcript_excerpt(path: Path, *, tail: bool = False) -> str:
     """Extract only user/assistant conversation text from bounded JSONL rows."""
     messages: list[str] = []
     if tail:
-        raw_limit = os.environ.get("KINDLE_AGENT_TITLE_TAIL_LINES", str(MAX_SOURCE_LINES))
+        raw_limit = os.environ.get("KINDLE_AGENT_TITLE_TAIL_LINES", str(DEFAULT_TAIL_LINES))
         try:
             line_limit = max(50, int(raw_limit))
         except ValueError:
-            line_limit = MAX_SOURCE_LINES
+            line_limit = DEFAULT_TAIL_LINES
         source_lines = _tail_lines(path, line_limit)
     else:
         with path.open("r", encoding="utf-8", errors="replace") as handle:
             source_lines = []
             for line_number, line in enumerate(handle):
-                if line_number >= MAX_SOURCE_LINES:
+                if line_number >= INITIAL_SOURCE_LINES:
                     break
                 source_lines.append(line)
     for line in source_lines:

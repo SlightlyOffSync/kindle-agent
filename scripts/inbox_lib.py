@@ -22,7 +22,7 @@ SESSIONS = INBOX / "sessions"
 INDEX = INBOX / "index.json"
 INGEST_LOCK = INBOX / ".ingest.lock"
 DEFAULT_MAX_FEED_BYTES = 24 * 1024
-DEFAULT_TITLE_INTERVAL_LINES = 500
+DEFAULT_TITLE_INTERVAL_LINES = 700
 ENTRY_START_RE = re.compile(
     r"(?m)^(?=\*\*[^*\n]+\*\* · \d{2}:\d{2}\n(?:\n|$))"
 )

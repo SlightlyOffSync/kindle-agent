@@ -83,8 +83,8 @@ complete Markdown messages and exposes at most 15 rendered pages. Override
 
 The Kindle library shows a short conversation title followed by the agent,
 working folder, update time, and total source-transcript line count. A detached
-`pi` call generates the first title, then refreshes it every 500 new transcript
-lines from the most recent 300 lines. It uses `openai-codex/gpt-5.6-luna` with
+`pi` call generates the first title, then refreshes it every 700 new transcript
+lines from the most recent 100 lines. It uses `openai-codex/gpt-5.6-luna` with
 thinking disabled, no tools, no project context, and no saved Pi session. Only
 user/assistant conversation text is sent; system instructions and tool payloads
 are excluded, and the bounded excerpt is piped over stdin instead of exposed in
